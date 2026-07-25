@@ -120,22 +120,22 @@ def _weather_label(condition):
     return (condition or "—").upper()
 
 
-# --- Strict 7-color palette (matches the panel exactly) -------------------
+# --- Strict palette (panel has black, white, red, blue, green) ----------
+# Yellow is not rendered on this panel, so we only use these five colors.
 # All drawing uses these colors so the panel renders solid, un-dithered
 # pixels.  The palette indices are BGR-encoded in the Waveshare driver.
 BLACK = (0, 0, 0)
 WHITE = (255, 255, 255)
-YELLOW = (255, 255, 0)
 RED = (255, 0, 0)
 BLUE = (0, 0, 255)
 GREEN = (0, 255, 0)
 
 # --- Entity colors for the dashboard charts -------------------------------
 CHART_ENTITIES = [
-    ("sensor.basement_indoor_temperature", "Bsmt", YELLOW),
-    ("sensor.spare_temp", "Bt-px", RED),
-    ("sensor.basement_humidity", "Bsmt", BLUE),
-    ("sensor.spare_humidity", "Bt-px", GREEN),
+    ("sensor.basement_indoor_temperature", "Bsmt", RED),
+    ("sensor.spare_temp", "Bt-px", BLUE),
+    ("sensor.basement_humidity", "Bsmt", GREEN),
+    ("sensor.spare_humidity", "Bt-px", WHITE),
 ]
 CHART_HOURS = int(os.environ.get("HA_CHART_HOURS", "12"))
 SNAPSHOT_ENTITY = os.environ.get("HA_SNAPSHOT_ENTITY", "image.frontlawn_person")
@@ -150,7 +150,7 @@ def render(states, width=800, height=480):
     temps, humids, weathers = pick_entities(states)
 
     # Header band
-    d.rectangle([0, 0, width, 70], fill=YELLOW)
+    d.rectangle([0, 0, width, 70], fill=RED)
     d.text((24, 18), "HOME ASSISTANT", fill=BLACK, font=_font(36))
     now = datetime.now().strftime("%a %b %d  %H:%M")
     tw = d.textlength(now, font=_font(26))
@@ -168,7 +168,7 @@ def render(states, width=800, height=480):
         label = _weather_label(cond)
 
         d.rectangle([20, y, width - 20, y + 110], outline=WHITE, width=3)
-        d.text((40, y + 14), label, fill=YELLOW, font=_font(48))
+        d.text((40, y + 14), label, fill=RED, font=_font(48))
         parts = []
         if temp != "":
             parts.append(f"{temp}°C")
@@ -372,8 +372,8 @@ def _draw_subchart(d, x, y, w, h, title, unit, series, max_points=12):
     plot_w = w - margin_left - margin_right
     plot_h = h - margin_top - margin_bottom
 
-    # title in yellow
-    d.text((x + 14, y + 10), title, fill=YELLOW, font=_font(24))
+    # title in white
+    d.text((x + 14, y + 10), title, fill=WHITE, font=_font(24))
 
     all_vals = [v for _, _, pts in series for _, v in pts if v is not None]
     if not all_vals:
@@ -436,8 +436,8 @@ def render_combined(width=800, height=480):
     header_h = 46
     gap = 8
 
-    # Bold yellow header, black text
-    d.rectangle([0, 0, width, header_h], fill=YELLOW)
+    # Bold red header, black text
+    d.rectangle([0, 0, width, header_h], fill=RED)
     d.text((14, 10), "Front Lawn E-Ink", fill=BLACK, font=_font(30))
     ts_now = datetime.now().strftime("%a %d %H:%M").replace(" 0", " ")
     tw = d.textlength(ts_now, font=_font(22))
@@ -492,10 +492,10 @@ def render_combined(width=800, height=480):
                     outline=WHITE, width=2)
         img.paste(snap_img, (px, py))
 
-        # yellow caption bar with black text
+        # red caption bar with black text
         bar_y = right_y + right_h - cap_h
         d.rectangle([right_x, bar_y, right_x + right_w, right_y + right_h],
-                    fill=YELLOW)
+                    fill=RED)
         txt = "Detected " + _fmt_ts(ts)
         font = _font(18)
         tw = d.textlength(txt, font=font)

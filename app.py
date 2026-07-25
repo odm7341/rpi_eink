@@ -87,28 +87,40 @@ def prepare_image(file_bytes):
     return canvas
 
 
-def quantize_preview(image):
-    """Produce a small preview PNG quantized to the panel's 7 colors so the
-    web page shows what will actually appear on the screen."""
+def quantize_preview(image, dither=True):
+    """Produce a small preview PNG quantized to the panel's 7 colors.
+
+    Uploaded photos are dithered for smooth tones; dashboard images are
+    dithered=False so they stay solid colors.
+    """
     pal_image = Image.new("P", (1, 1))
     pal_image.putpalette(PALETTE)
-    dithered = image.convert("RGB").quantize(
-        palette=pal_image, dither=Image.Dither.NONE
-    ).convert("RGB")
-    preview = dithered.copy()
+    kwargs = {"palette": pal_image}
+    if dither is True:
+        kwargs["dither"] = Image.Dither.FLOYDSTEINBERG
+    elif dither is False:
+        kwargs["dither"] = Image.Dither.NONE
+    elif dither is not None:
+        kwargs["dither"] = dither
+    quantized = image.convert("RGB").quantize(**kwargs).convert("RGB")
+    preview = quantized.copy()
     preview.thumbnail((480, 288))
     return preview
 
 
-def render_to_epd(canvas):
+def render_to_epd(canvas, dither=False):
     """Push ``canvas`` to the display. Safe to call repeatedly; the panel is
-    put to sleep after each refresh to protect the hardware."""
+    put to sleep after each refresh to protect the hardware.
+
+    ``dither=True`` matches the Waveshare driver's default Floyd-Steinberg
+    dithering for uploaded photos. ``dither=False`` keeps dashboard colors
+    solid and non-dithered.
+    """
     epd = get_epd()
     with _epd_lock:
         epd.init()
         try:
-            # Use our own packing so we can quantize without dithering.
-            buf = pack_buffer(canvas)
+            buf = pack_buffer(canvas, dither=Image.Dither.FLOYDSTEINBERG if dither else Image.Dither.NONE)
             epd.display(buf)
         finally:
             try:
@@ -147,7 +159,7 @@ def upload():
     quantize_preview(canvas).save(THUMB_PATH, "PNG")
 
     try:
-        render_to_epd(canvas)
+        render_to_epd(canvas, dither=True)
     except Exception as exc:  # noqa: BLE001
         log.exception("EPD refresh failed")
         return jsonify(ok=False, error=f"Display update failed: {exc}"), 500
@@ -173,10 +185,10 @@ def homeassistant():
 
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     canvas.save(LAST_PATH, "PNG")
-    quantize_preview(canvas).save(THUMB_PATH, "PNG")
+    quantize_preview(canvas, dither=False).save(THUMB_PATH, "PNG")
 
     try:
-        render_to_epd(canvas)
+        render_to_epd(canvas, dither=False)
     except Exception as exc:  # noqa: BLE001
         log.exception("EPD refresh failed")
         return jsonify(ok=False, error=f"Display update failed: {exc}"), 500
@@ -192,8 +204,8 @@ def _render_dashboard():
     canvas = ha_display.fetch_and_render_dashboard(EPD_WIDTH, EPD_HEIGHT)
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     canvas.save(LAST_PATH, "PNG")
-    quantize_preview(canvas).save(THUMB_PATH, "PNG")
-    render_to_epd(canvas)
+    quantize_preview(canvas, dither=False).save(THUMB_PATH, "PNG")
+    render_to_epd(canvas, dither=False)
     return canvas
 
 

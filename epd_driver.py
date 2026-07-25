@@ -37,12 +37,13 @@ PALETTE = (
 PALETTE_TO_NIBBLE = {0: 0, 1: 2, 2: 4, 3: 6, 4: 1, 5: 3, 6: 5}
 
 
-def pack_buffer(image, width=EPD_WIDTH, height=EPD_HEIGHT):
+def pack_buffer(image, width=EPD_WIDTH, height=EPD_HEIGHT, dither=None):
     """Convert an RGB image into the panel's 4-bit packed buffer.
 
-    This is the same packing performed by the Waveshare driver, but it
-    quantizes to the 7-color palette **without dithering** so images that use
-    only the palette colors stay crisp and free of dithering artifacts.
+    This is the same packing performed by the Waveshare driver, but with
+    an optional dither setting. By default it matches the driver (Floyd-
+    Steinberg dithering) so uploaded photos look smooth. Pass
+    ``dither=Image.Dither.NONE`` for solid, non-dithered dashboard colors.
     """
     from PIL import Image
 
@@ -59,9 +60,10 @@ def pack_buffer(image, width=EPD_WIDTH, height=EPD_HEIGHT):
                     imwidth, imheight, width, height)
         image_temp = image
 
-    image_7color = image_temp.convert("RGB").quantize(
-        palette=pal_image, dither=Image.Dither.NONE
-    )
+    kwargs = {"palette": pal_image}
+    if dither is not None:
+        kwargs["dither"] = dither
+    image_7color = image_temp.convert("RGB").quantize(**kwargs)
     pixels = image_7color.load()
     buf = [0x00] * (width * height // 2)
     for y in range(height):
