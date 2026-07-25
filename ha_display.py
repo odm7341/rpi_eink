@@ -221,16 +221,16 @@ def fetch_and_render(width=800, height=480):
 
 # --- Dashboard: chart + camera snapshot -------------------------------------
 
-# Entities for the chart. Override via env if needed.
+# Chart entities. Override via env if needed.
 CHART_ENTITIES = [
-    ("sensor.basement_indoor_temperature", "Basement T", RED),
-    ("sensor.spare_temp", "Bt-prox T", YELLOW),
-    ("sensor.basement_humidity", "Basement H", BLUE),
-    ("sensor.spare_humidity", "Bt-prox H", GREEN),
+    ("sensor.basement_indoor_temperature", "Bsmt", RED),
+    ("sensor.spare_temp", "Bt-px", YELLOW),
+    ("sensor.basement_humidity", "Bsmt", BLUE),
+    ("sensor.spare_humidity", "Bt-px", GREEN),
 ]
 CHART_HOURS = int(os.environ.get("HA_CHART_HOURS", "12"))
 SNAPSHOT_ENTITY = os.environ.get("HA_SNAPSHOT_ENTITY", "image.frontlawn_person")
-MOTION_ENTITY = os.environ.get("HA_MOTION_ENTITY", "binary_sensor.frontlawn_motion")
+MOTION_ENTITY = os.environ.get("HA_MOTION_ENTITY", "binary_sensor.frontlawn_person_occupancy")
 
 
 def _ha_get(path, binary=False, timeout=20):
@@ -274,6 +274,40 @@ def get_history(entity_ids, hours=CHART_HOURS):
     return out
 
 
+def _resample_history(history, hours=CHART_HOURS):
+    """Average each entity's history into one point per hour.
+
+    Returns ``{entity_id: [(bucket_index, value), ...]}`` for the last
+    ``hours`` buckets, with values forward-filled when an hour is empty.
+    """
+    now = datetime.now(timezone.utc)
+    buckets = {i: now - timedelta(hours=i) for i in range(hours - 1, -1, -1)}
+    out = {}
+    for eid, pts in history.items():
+        bucket_vals = {i: [] for i in range(hours)}
+        for ts_iso, v in pts:
+            try:
+                dt = datetime.fromisoformat(ts_iso.replace("Z", ""))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+            except Exception:  # noqa: BLE001
+                continue
+            idx = int((now - dt).total_seconds() // 3600)
+            if 0 <= idx < hours:
+                bucket_vals[hours - 1 - idx].append(v)
+        # average each bucket, forward-fill empties
+        res = []
+        last = None
+        for i in range(hours):
+            vals = bucket_vals[i]
+            val = sum(vals) / len(vals) if vals else last
+            if val is not None:
+                last = val
+            res.append((i, val))
+        out[eid] = res
+    return out
+
+
 def get_detection_snapshot():
     """Return ``(PIL.Image, last_changed_iso)`` or ``(None, None)`` if empty."""
     try:
@@ -284,7 +318,6 @@ def get_detection_snapshot():
     except Exception as exc:  # noqa: BLE001
         log.warning("snapshot fetch failed: %r", exc)
         return None, None
-    # The state (last_changed timestamp) comes from /api/states
     ts = None
     try:
         states = _ha_get("/api/states")
@@ -298,176 +331,194 @@ def get_detection_snapshot():
 
 
 def _fmt_ts(ts_iso):
-    """Render an HA ISO timestamp (e.g. ``2026-07-25T00:40:58.111168``) short."""
     if not ts_iso:
         return "—"
     try:
         dt = datetime.fromisoformat(ts_iso.replace("Z", ""))
-        return dt.strftime("%a %d  %H:%M")
+        return dt.strftime("%a %d %H:%M").replace(" 0", " ")
     except Exception:  # noqa: BLE001
         return ts_iso[:19]
 
 
-X_LEFT = 500  # chart width
+def _round_range(vmin, vmax):
+    """Pad min/max slightly and return to one decimal."""
+    span = (vmax - vmin) or 1
+    pad = span * 0.08
+    return max(vmin - pad, 0), vmax + pad
 
 
-def _draw_legend(d, x, y, entities):
-    """Draw a small color-key legend starting at (x,y)."""
-    for i, (eid, label, color) in enumerate(entities):
-        ly = y + i * 22
-        d.line([x, ly + 8, x + 24, ly + 8], fill=color, width=3)
-        d.text((x + 32, ly), label, fill=BLACK, font=_font(18))
+def _draw_grid(d, plot_x0, plot_y0, plot_w, plot_h, vmin, vmax, unit="", steps=3):
+    """Draw horizontal grid lines and y-axis labels."""
+    for i in range(steps + 1):
+        frac = i / steps
+        y = plot_y0 + plot_h * (1 - frac)
+        v = vmin + (vmax - vmin) * frac
+        # dashed grid line
+        for x in range(plot_x0, plot_x0 + plot_w, 10):
+            if i in (0, steps):
+                d.line([x, y, x + 6, y], fill=BLACK, width=1)
+            else:
+                d.line([x, y, x + 4, y], fill=BLACK, width=1)
+        label = f"{v:.1f}" if unit in ("", "°F") else f"{v:.0f}"
+        tw = d.textlength(label, font=_font(12))
+        d.text((plot_x0 - tw - 6, y - 6), label, fill=BLACK, font=_font(12))
 
 
-def render_chart(history, x0, y0, w, h):
-    """Render a dual-y-axis line chart of CHART_ENTITIES onto a new (w,h)
-    image and return it (caller pastes at x0,y0)."""
-    img = Image.new("RGB", (w, h), WHITE)
-    d = ImageDraw.Draw(img)
+def _draw_subchart(d, x, y, w, h, title, unit, series, max_points=12):
+    """Draw a single clean line chart on the existing canvas.
 
-    temps = [(label, color, history.get(eid, []))
-             for eid, label, color in CHART_ENTITIES if "T" in label]
-    humids = [(label, color, history.get(eid, []))
-              for eid, label, color in CHART_ENTITIES if "H" in label]
+    ``series`` is ``[(label, color, [(x_idx, value), ...]), ...]``.
+    """
+    # card background
+    d.rounded_rectangle([x, y, x + w, y + h], radius=10, outline=BLACK,
+                       width=2, fill=WHITE)
 
-    plot_x0, plot_y0 = 48, 36
-    plot_w = w - 48 - 48
-    plot_h = h - 36 - 36
+    # layout
+    margin_left = 50
+    margin_right = 12
+    margin_top = 36
+    margin_bottom = 22
+    plot_x0 = x + margin_left
+    plot_y0 = y + margin_top
+    plot_w = w - margin_left - margin_right
+    plot_h = h - margin_top - margin_bottom
 
-    d.rectangle([plot_x0, plot_y0, plot_x0 + plot_w, plot_y0 + plot_h],
-                outline=BLACK, width=2)
+    # title
+    d.text((x + 12, y + 10), title, fill=BLACK, font=_font(18))
 
-    def allvals(series):
-        return [v for _, _, pts in series for _, v in pts]
+    all_vals = [v for _, _, pts in series for _, v in pts if v is not None]
+    if not all_vals:
+        d.text((x + 20, y + 60), "No data", fill=BLACK, font=_font(16))
+        return
 
-    t_vals = allvals(temps)
-    h_vals = allvals(humids)
+    vmin, vmax = _round_range(min(all_vals), max(all_vals))
+    if vmin == vmax:
+        vmax = vmin + 1
 
-    t_min, t_max = (min(t_vals), max(t_vals)) if t_vals else (0, 1)
-    h_min, h_max = (min(h_vals), max(h_vals)) if h_vals else (0, 1)
-    if t_max == t_min:
-        t_max += 1
-    if h_max == h_min:
-        h_max += 1
+    # axes
+    d.line([plot_x0, plot_y0, plot_x0, plot_y0 + plot_h], fill=BLACK, width=2)
+    d.line([plot_x0, plot_y0 + plot_h, plot_x0 + plot_w, plot_y0 + plot_h],
+           fill=BLACK, width=2)
 
-    now = datetime.now(timezone.utc)
-    start = now - timedelta(hours=CHART_HOURS)
-    span = (now - start).total_seconds() or 1
+    _draw_grid(d, plot_x0, plot_y0, plot_w, plot_h, vmin, vmax, unit)
 
-    def x_for(ts_iso):
-        try:
-            dt = datetime.fromisoformat(ts_iso.replace("Z", ""))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-        except Exception:  # noqa: BLE001
-            return None
-        frac = (dt - start).total_seconds() / span
-        if frac < 0 or frac > 1:
-            return None
-        return plot_x0 + frac * plot_w
+    # x-axis labels
+    d.text((plot_x0, plot_y0 + plot_h + 6), "-12h", fill=BLACK, font=_font(12))
+    d.text((plot_x0 + plot_w - 22, plot_y0 + plot_h + 6), "now",
+           fill=BLACK, font=_font(12))
 
-    def y_temp(v):
-        return plot_y0 + plot_h * (1 - (v - t_min) / (t_max - t_min))
-
-    def y_hum(v):
-        return plot_y0 + plot_h * (1 - (v - h_min) / (h_max - h_min))
-
-    # Gridlines (3 horizontal)
-    for i in range(1, 3):
-        gy = plot_y0 + i * plot_h / 3
-        for gx in range(plot_x0, plot_x0 + plot_w, 8):
-            d.line([gx, gy, gx + 4, gy], fill=BLACK, width=1)
-
-    # Y axis labels (left: temp, right: humidity %)
-    d.text((2, plot_y0 - 4), f"{t_max:.1f}", fill=BLACK, font=_font(14))
-    d.text((2, plot_y0 + plot_h - 12), f"{t_min:.1f}", fill=BLACK, font=_font(14))
-    d.text((plot_x0 + plot_w + 6, plot_y0 - 4), f"{h_max:.0f}%", fill=BLACK, font=_font(14))
-    d.text((plot_x0 + plot_w + 6, plot_y0 + plot_h - 12), f"{h_min:.0f}%", fill=BLACK, font=_font(14))
-
-    # X axis labels (start & end hours)
-    d.text((plot_x0, plot_y0 + plot_h + 6), start.strftime("%H:00"),
-           fill=BLACK, font=_font(14))
-    d.text((plot_x0 + plot_w - 24, plot_y0 + plot_h + 6), "now",
-           fill=BLACK, font=_font(14))
-
-    # Plot lines
-    for series, yfn in ((temps, y_temp), (humids, y_hum)):
-        for label, color, pts in series:
-            if len(pts) < 2:
+    # plot lines
+    for label, color, pts in series:
+        xy = []
+        for idx, v in pts:
+            if v is None:
                 continue
-            xy = []
-            for ts_iso, v in pts:
-                x = x_for(ts_iso)
-                if x is None:
-                    continue
-                xy.append((x, yfn(v)))
-            if len(xy) >= 2:
-                d.line(xy, fill=color, width=2)
-                # Mark the latest point with a dot
-                lx, ly = xy[-1]
-                d.ellipse([lx - 3, ly - 3, lx + 3, ly + 3], fill=color)
+            px = plot_x0 + (idx / (max_points - 1)) * plot_w
+            py = plot_y0 + plot_h * (1 - (v - vmin) / (vmax - vmin))
+            xy.append((px, py))
+        if len(xy) >= 2:
+            d.line(xy, fill=color, width=3)
+            # latest dot
+            d.ellipse([xy[-1][0] - 4, xy[-1][1] - 4,
+                       xy[-1][0] + 4, xy[-1][1] + 4], fill=color)
+            # current value label near the latest dot
+            latest = pts[-1][1]
+            if latest is not None:
+                text = f"{latest:.1f}{unit}"
+                d.text((xy[-1][0] + 8, xy[-1][1] - 8), text,
+                       fill=color, font=_font(12))
 
-    # Title
-    d.text((plot_x0, 6), f"Last {CHART_HOURS}h", fill=BLACK, font=_font(20))
-
-    # Legend
-    _draw_legend(d, plot_x0 + plot_w - 130, 6, CHART_ENTITIES)
-    return img
+    # legend (top right)
+    leg_x = x + w - 80
+    leg_y = y + 10
+    for i, (label, color, pts) in enumerate(series):
+        ly = leg_y + i * 16
+        d.line([leg_x, ly + 5, leg_x + 16, ly + 5], fill=color, width=3)
+        d.text((leg_x + 22, ly), label, fill=BLACK, font=_font(12))
 
 
 def render_combined(width=800, height=480):
-    """Render the full dashboard: chart on the left half, latest camera
-    detection snapshot + timestamp on the right half."""
+    """Render the full dashboard: stacked charts on the left, latest camera
+    detection snapshot on the right."""
     img = Image.new("RGB", (width, height), WHITE)
     d = ImageDraw.Draw(img)
 
-    # Header
-    d.rectangle([0, 0, width, 50], fill=BLACK)
-    d.text((16, 10), "FRONTLAWN E-INK", fill=WHITE, font=_font(26))
-    ts_now = datetime.now().strftime("%a %d  %H:%M")
-    tw = d.textlength(ts_now, font=_font(22))
-    d.text((width - tw - 16, 14), ts_now, fill=WHITE, font=_font(22))
+    header_h = 36
+    gap = 6
 
-    # Chart (left)
-    chart_x = 0
-    chart_y = 56
-    chart_w = X_LEFT
-    chart_h = height - chart_y - 8
+    # Sleek header
+    d.rectangle([0, 0, width, header_h], fill=BLACK)
+    d.text((14, 8), "Front Lawn E-Ink", fill=WHITE, font=_font(20))
+    ts_now = datetime.now().strftime("%a %d %H:%M").replace(" 0", " ")
+    tw = d.textlength(ts_now, font=_font(16))
+    d.text((width - tw - 14, 10), ts_now, fill=WHITE, font=_font(16))
+
+    # Left panel: two charts
+    left_x = 0
+    left_y = header_h + gap
+    left_w = 510
+    left_h = height - left_y - gap
+    chart_h = (left_h - gap) // 2
+
     entity_ids = [eid for eid, _, _ in CHART_ENTITIES]
     try:
-        history = get_history(entity_ids)
+        raw = get_history(entity_ids)
+        history = _resample_history(raw)
     except Exception as exc:  # noqa: BLE001
         log.exception("history fetch failed")
         history = {}
-    chart_img = render_chart(history, chart_x, chart_y, chart_w, chart_h)
-    img.paste(chart_img, (chart_x, chart_y))
 
-    # Snapshot (right)
-    snap_x = X_LEFT + 8
-    snap_y = 60
-    snap_w = width - snap_x - 8
-    snap_h = height - snap_y - 8
+    temp_series = [(label, color, history.get(eid, []))
+                   for eid, label, color in CHART_ENTITIES if "temp" in eid]
+    hum_series = [(label, color, history.get(eid, []))
+                  for eid, label, color in CHART_ENTITIES if "humid" in eid]
 
-    d.text((snap_x, snap_y), "Latest detection", fill=BLACK, font=_font(20))
+    _draw_subchart(d, left_x, left_y, left_w, chart_h,
+                   "Temperature", "°F", temp_series)
+    _draw_subchart(d, left_x, left_y + chart_h + gap, left_w, chart_h,
+                   "Humidity", "%", hum_series)
+
+    # Right panel: snapshot
+    right_x = left_x + left_w + gap
+    right_y = header_h + gap
+    right_w = width - right_x - gap
+    right_h = height - right_y - gap
+
     snap_img, ts = get_detection_snapshot()
-    caption_y = snap_y + 28
     if snap_img is not None:
-        # Fit inside (snap_w, snap_h - 60) leaving room for timestamp
-        target_w = snap_w
-        target_h = snap_h - 60
+        # Fit snapshot, leaving room for caption bar
+        cap_h = 26
+        avail_h = right_h - cap_h
         sw, sh = snap_img.size
-        scale = min(target_w / sw, target_h / sh)
-        nw, nh = int(sw * scale), int(sh * scale)
+        scale = min(right_w / sw, avail_h / sh)
+        nw = max(1, int(sw * scale))
+        nh = max(1, int(sh * scale))
         snap_img = snap_img.resize((nw, nh), Image.LANCZOS)
-        px = snap_x + (snap_w - nw) // 2
-        py = caption_y
-        d.rectangle([px - 2, py - 2, px + nw + 2, py + nh + 2],
-                    outline=BLACK, width=2)
+        px = right_x + (right_w - nw) // 2
+        py = right_y + (avail_h - nh) // 2
+
+        # snapshot border
+        d.rounded_rectangle([px - 2, py - 2, px + nw + 2, py + nh + 2],
+                            radius=8, outline=BLACK, width=2)
         img.paste(snap_img, (px, py))
-        d.text((snap_x, py + nh + 6), _fmt_ts(ts), fill=BLUE,
-               font=_font(18))
+
+        # caption bar
+        bar_y = right_y + right_h - cap_h
+        d.rounded_rectangle([right_x, bar_y, right_x + right_w, right_y + right_h],
+                            radius=6, fill=BLACK)
+        txt = "Detected " + _fmt_ts(ts)
+        font = _font(14)
+        tw = d.textlength(txt, font=font)
+        if tw > right_w - 8:
+            txt = _fmt_ts(ts)
+            tw = d.textlength(txt, font=font)
+        d.text((right_x + (right_w - tw) // 2, bar_y + 4),
+               txt, fill=WHITE, font=font)
     else:
-        d.text((snap_x, caption_y), "No snapshot", fill=RED, font=_font(22))
+        d.rounded_rectangle([right_x, right_y, right_x + right_w, right_y + right_h],
+                            radius=10, outline=BLACK, width=2)
+        d.text((right_x + 20, right_y + 40), "No snapshot", fill=RED,
+               font=_font(18))
 
     return img
 
