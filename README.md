@@ -97,6 +97,37 @@ humidity` sensors, plus any `weather.*` entity, up to 8 cards. If no
 weather entity is present it is skipped. `.env` is gitignored, so the
 token never gets committed.
 
+### Dashboard (chart + camera snapshot)
+
+The **Dashboard** button renders a combined screen: a 12-hour dual-axis
+line chart of basement + Bt-prox temperature/humidity on the left, and
+the latest frontlawn camera detection snapshot + timestamp on the right.
+
+To **auto-refresh on motion**, add an automation in Home Assistant that
+fires this app's webhook when the frontlawn camera detects motion. In
+HA, create a new automation in YAML mode:
+
+```yaml
+alias: eink frontlawn refresh
+trigger:
+  - platform: state
+    entity_id: binary_sensor.frontlawn_motion
+    to: "on"
+action:
+  - service: webhook.trigger
+    data:
+      url: http://<raspberrypi>:8000/ha_webhook
+      method: POST
+```
+
+(Optionally set `HA_WEBHOOK_SECRET` in `.env` and pass it as `?secret=`
+or a JSON `secret` field to authenticate the webhook.)
+
+The motion-triggered refresh runs in a background thread so HA gets an
+immediate `200`. If a refresh is already in progress the webhook returns
+`409` and the request is dropped (the e-Paper can't refresh twice at
+once).
+
 ## Mock mode
 
 If the hardware driver can't be loaded (e.g. you're developing on a laptop),

@@ -23,6 +23,7 @@
       <div class="actions">
         <button type="submit" id="send" disabled>Send to display</button>
         <button type="button" id="ha">Home Assistant</button>
+        <button type="button" id="dash">Dashboard</button>
         <button type="button" id="clear">Clear screen</button>
       </div>
     </form>
@@ -47,6 +48,7 @@
     const send = document.getElementById('send');
     const clearBtn = document.getElementById('clear');
     const haBtn = document.getElementById('ha');
+    const dashBtn = document.getElementById('dash');
     const status = document.getElementById('status');
     const filename = document.getElementById('filename');
     const lastImg = document.getElementById('last');
@@ -135,6 +137,8 @@
     clearBtn.addEventListener('click', () => postEmpty('/clear', 'Clearing (this takes ~25s)\u2026'));
 
     haBtn.addEventListener('click', () => postEmpty('/ha', 'Fetching Home Assistant & refreshing (this takes ~25s)\u2026'));
+
+    dashBtn.addEventListener('click', () => postEmpty('/ha_dashboard', 'Fetching dashboard & refreshing (this takes ~25s)\u2026'));
   </script>
 </body>
 </html>

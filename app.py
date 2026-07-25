@@ -184,6 +184,72 @@ def homeassistant():
                    message="Home Assistant screen sent to the display (refresh takes ~25s).")
 
 
+def _render_dashboard():
+    """Shared helper: fetch HA dashboard, save previews, push to EPD."""
+    canvas = ha_display.fetch_and_render_dashboard(EPD_WIDTH, EPD_HEIGHT)
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    canvas.save(LAST_PATH, "PNG")
+    quantize_preview(canvas).save(THUMB_PATH, "PNG")
+    render_to_epd(canvas)
+    return canvas
+
+
+@app.route("/ha_dashboard", methods=["POST"])
+def ha_dashboard():
+    if ha_display is None:
+        return jsonify(ok=False, error="ha_display module not available."), 500
+    if not ha_display.configured():
+        return jsonify(ok=False,
+                       error="Set HA_URL and HA_TOKEN in .env to use the dashboard."), 400
+    if _dash_in_progress.is_set():
+        return jsonify(ok=False, error="A dashboard refresh is already in progress."), 409
+    try:
+        _render_dashboard()
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Dashboard fetch/render failed")
+        return jsonify(ok=False, error=f"HA request failed: {exc}"), 502
+    thumb = url_for("static", filename=f"uploads/{THUMB_FILE}") + f"?v={int(time.time())}"
+    return jsonify(ok=True,
+                   preview=thumb,
+                   message="Dashboard sent to the display (refresh takes ~25s).")
+
+
+# Webhook secret (optional): set HA_WEBHOOK_SECRET in .env to require it.
+WEBHOOK_SECRET = os.environ.get("HA_WEBHOOK_SECRET", "")
+_dash_in_progress = threading.Event()
+
+
+@app.route("/ha_webhook", methods=["POST"])
+def ha_webhook():
+    """Triggered by a Home Assistant automation on frontlawn motion.
+
+    Accepts an optional ``secret`` JSON field or ``?secret=`` query param
+    that must match HA_WEBHOOK_SECRET if that var is set. The refresh runs
+    in a background thread so HA gets an immediate 200 response.
+    """
+    if ha_display is None or not ha_display.configured():
+        return jsonify(ok=False, error="Dashboard not configured."), 400
+    if WEBHOOK_SECRET:
+        provided = request.args.get("secret") or (request.get_json(silent=True) or {}).get("secret", "")
+        if provided != WEBHOOK_SECRET:
+            return jsonify(ok=False, error="Bad webhook secret."), 403
+    if _dash_in_progress.is_set():
+        return jsonify(ok=False, error="A refresh is already in progress."), 409
+
+    def _bg():
+        _dash_in_progress.set()
+        try:
+            _render_dashboard()
+            log.info("webhook: dashboard refreshed")
+        except Exception as exc:  # noqa: BLE001
+            log.exception("webhook dashboard refresh failed")
+        finally:
+            _dash_in_progress.clear()
+
+    threading.Thread(target=_bg, daemon=True).start()
+    return jsonify(ok=True, message="Dashboard refresh started.")
+
+
 @app.route("/clear", methods=["POST"])
 def clear():
     try:
