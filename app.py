@@ -22,6 +22,11 @@ try:
 except ImportError:  # allow running as a bare module import for tests
     from epd_driver import EPD_HEIGHT, EPD_WIDTH, get_epd, PALETTE  # noqa: F401
 
+try:
+    import ha_display
+except ImportError:  # noqa: F401
+    ha_display = None
+
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -124,6 +129,35 @@ def upload():
     return jsonify(ok=True,
                    preview=thumb,
                    message="Image sent to the display (refresh takes ~25s).")
+
+
+@app.route("/ha", methods=["POST"])
+def homeassistant():
+    if ha_display is None:
+        return jsonify(ok=False, error="ha_display module not available."), 500
+    if not ha_display.configured():
+        return jsonify(ok=False,
+                       error="Set HA_URL and HA_TOKEN env vars to use Home Assistant."), 400
+    try:
+        canvas = ha_display.fetch_and_render(EPD_WIDTH, EPD_HEIGHT)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Home Assistant fetch/render failed")
+        return jsonify(ok=False, error=f"HA request failed: {exc}"), 502
+
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    canvas.save(LAST_PATH, "PNG")
+    quantize_preview(canvas).save(THUMB_PATH, "PNG")
+
+    try:
+        render_to_epd(canvas)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("EPD refresh failed")
+        return jsonify(ok=False, error=f"Display update failed: {exc}"), 500
+
+    thumb = url_for("static", filename=f"uploads/{THUMB_FILE}") + f"?v={int(time.time())}"
+    return jsonify(ok=True,
+                   preview=thumb,
+                   message="Home Assistant screen sent to the display (refresh takes ~25s).")
 
 
 @app.route("/clear", methods=["POST"])

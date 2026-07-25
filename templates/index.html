@@ -22,6 +22,7 @@
 
       <div class="actions">
         <button type="submit" id="send" disabled>Send to display</button>
+        <button type="button" id="ha">Home Assistant</button>
         <button type="button" id="clear">Clear screen</button>
       </div>
     </form>
@@ -45,6 +46,7 @@
     const form = document.getElementById('upload-form');
     const send = document.getElementById('send');
     const clearBtn = document.getElementById('clear');
+    const haBtn = document.getElementById('ha');
     const status = document.getElementById('status');
     const filename = document.getElementById('filename');
     const lastImg = document.getElementById('last');
@@ -74,6 +76,30 @@
         setFile(e.dataTransfer.files[0]);
       }
     });
+
+    async function postEmpty(url, busyText) {
+      setStatus(busyText || 'Working\u2026', 'busy');
+      try {
+        const res = await fetch(url, { method: 'POST' });
+        const json = await res.json();
+        if (json.ok) {
+          setStatus('\u2713 ' + json.message, 'ok');
+          if (json.preview && lastImg) {
+            lastImg.src = json.preview;
+            lastImg.alt = json.preview ?
+                          'last uploaded image' : 'last uploaded image';
+            const empty = document.querySelector('.preview .empty');
+            if (empty) empty.remove();
+          } else if (!lastImg) {
+            location.reload();
+          }
+        } else {
+          setStatus('\u2717 ' + (json.error || 'Request failed'), 'err');
+        }
+      } catch (err) {
+        setStatus('\u2717 Network error: ' + err, 'err');
+      }
+    }
 
     async function postForm(formData, busyText) {
       setStatus(busyText || 'Working\u2026', 'busy');
@@ -106,17 +132,9 @@
       postForm(fd, 'Uploading & refreshing (this takes ~25s)\u2026');
     });
 
-    clearBtn.addEventListener('click', async () => {
-      setStatus('Clearing (this takes ~25s)\u2026', 'busy');
-      try {
-        const res = await fetch('/clear', { method: 'POST' });
-        const json = await res.json();
-        setStatus(json.ok ? '\u2713 ' + json.message : '\u2717 ' + (json.error || 'Clear failed'),
-                  json.ok ? 'ok' : 'err');
-      } catch (err) {
-        setStatus('\u2717 Network error: ' + err, 'err');
-      }
-    });
+    clearBtn.addEventListener('click', () => postEmpty('/clear', 'Clearing (this takes ~25s)\u2026'));
+
+    haBtn.addEventListener('click', () => postEmpty('/ha', 'Fetching Home Assistant & refreshing (this takes ~25s)\u2026'));
   </script>
 </body>
 </html>

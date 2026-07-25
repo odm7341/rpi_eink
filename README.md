@@ -60,6 +60,33 @@ Press **Send to display** (or **Clear screen** to blank it).
 | `PORT` | `8000` | Listen port |
 | `EPD_MOCK` | unset | When `1`, use a no-hardware mock (lets the app run/test anywhere) |
 | `LOG_LEVEL` | `INFO` | Logging verbosity |
+| `HA_URL` | unset | Home Assistant base URL, e.g. `http://192.168.0.172:8123` |
+| `HA_TOKEN` | unset | Long-lived access token from HA (Profile → Long-Lived Access Tokens) |
+
+## Home Assistant
+
+The **Home Assistant** button fetches sensor state from your HA instance
+via the REST API and renders an e-ink friendly dashboard summary (time,
+weather, temperature/humidity cards) with Pillow — lightweight enough
+for the Pi Zero (no headless browser needed).
+
+To set it up:
+
+1. In HA: Profile → **Long-Lived Access Tokens** → Create Token → name it `eink`.
+2. Copy the token, then run the app with:
+
+   ```bash
+   HA_URL=http://192.168.0.172:8123 \
+   HA_TOKEN=eyJhbGciOi... \
+   python3 app.py
+   ```
+
+3. Open the web page and press **Home Assistant**.
+
+The layout auto-discovers `device_class: temperature` and `device_class:
+humidity` sensors, plus any `weather.*` entity, up to 8 cards. If no
+weather entity is present it is skipped. The token is read from an
+environment variable only — nothing is committed to the repo.
 
 ## Mock mode
 
