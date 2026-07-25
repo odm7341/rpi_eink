@@ -1,0 +1,16 @@
+[Unit]
+Description=7.3 inch e-Paper web upload server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/%i/rpi_eink
+ExecStart=/usr/bin/python3 /home/%i/rpi_eink/app.py
+Restart=on-failure
+RestartSec=5
+# Use mock mode (no hardware) by uncommenting:
+# Environment=EPD_MOCK=1
+
+[Install]
+WantedBy=multi-user.target

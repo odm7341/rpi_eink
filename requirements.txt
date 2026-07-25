@@ -1,0 +1,5 @@
+# Cross-platform dependencies (install everywhere)
+Flask>=2.3
+Pillow>=10.0
+
+# Raspberry Pi only (see requirements-pi.txt)

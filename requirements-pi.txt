@@ -1,0 +1,3 @@
+# Raspberry Pi / armhf only — needs the SPI interface and GPIO access
+spidev>=3.5
+gpiozero>=1.6

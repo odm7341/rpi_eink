@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>7.3" e-Paper Upload</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header>
+    <h1>7.3" e-Paper HAT (E)</h1>
+    <p>Upload an image &mdash; it will be scaled to {{ width }}&times;{{ height }} and shown on the display.</p>
+  </header>
+
+  <main>
+    <form id="upload-form">
+      <div id="drop" class="dropzone">
+        <input type="file" id="file" name="image" accept="image/*" hidden>
+        <p><strong>Click to choose</strong> or drag an image here</p>
+        <small id="filename"></small>
+      </div>
+
+      <div class="actions">
+        <button type="submit" id="send" disabled>Send to display</button>
+        <button type="button" id="clear">Clear screen</button>
+      </div>
+    </form>
+
+    <div id="status" class="status hidden"></div>
+
+    <section class="preview">
+      <h2>Display preview</h2>
+      <p class="hint">Shown dithered to the panel&rsquo;s 7 colors.</p>
+      {% if has_last %}
+        <img id="last" src="{{ last_url }}" alt="last uploaded image">
+      {% else %}
+        <div class="empty">Nothing shown yet.</div>
+      {% endif %}
+    </section>
+  </main>
+
+  <script>
+    const drop = document.getElementById('drop');
+    const fileInput = document.getElementById('file');
+    const form = document.getElementById('upload-form');
+    const send = document.getElementById('send');
+    const clearBtn = document.getElementById('clear');
+    const status = document.getElementById('status');
+    const filename = document.getElementById('filename');
+    const lastImg = document.getElementById('last');
+
+    function setStatus(text, kind) {
+      status.textContent = text;
+      status.className = 'status ' + (kind || '');
+    }
+
+    function setFile(file) {
+      if (!file) { send.disabled = true; filename.textContent = ''; return; }
+      fileInput.files = [file].length ? fileInput.files : fileInput.files;
+      filename.textContent = file.name + ' (' + (file.size / 1024).toFixed(1) + ' KB)';
+      send.disabled = false;
+    }
+
+    drop.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => setFile(fileInput.files[0]));
+
+    ['dragover', 'dragenter'].forEach(ev =>
+      drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('hover'); }));
+    ['dragleave', 'drop'].forEach(ev =>
+      drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('hover'); }));
+    drop.addEventListener('drop', e => {
+      if (e.dataTransfer.files.length) {
+        fileInput.files = e.dataTransfer.files;
+        setFile(e.dataTransfer.files[0]);
+      }
+    });
+
+    async function postForm(formData, busyText) {
+      setStatus(busyText || 'Working\u2026', 'busy');
+      try {
+        const res = await fetch('/upload', { method: 'POST', body: formData });
+        const json = await res.json();
+        if (json.ok) {
+          setStatus('\u2713 ' + json.message, 'ok');
+          if (json.preview && lastImg) {
+            lastImg.src = json.preview;
+            lastImg.alt = 'last uploaded image';
+            const empty = document.querySelector('.preview .empty');
+            if (empty) empty.remove();
+          } else if (!lastImg) {
+            location.reload();
+          }
+        } else {
+          setStatus('\u2717 ' + (json.error || 'Upload failed'), 'err');
+        }
+      } catch (err) {
+        setStatus('\u2717 Network error: ' + err, 'err');
+      }
+    }
+
+    form.addEventListener('submit', e => {
+      e.preventDefault();
+      if (!fileInput.files.length) { setStatus('Choose an image first.', 'err'); return; }
+      const fd = new FormData();
+      fd.append('image', fileInput.files[0]);
+      postForm(fd, 'Uploading & refreshing (this takes ~25s)\u2026');
+    });
+
+    clearBtn.addEventListener('click', async () => {
+      setStatus('Clearing (this takes ~25s)\u2026', 'busy');
+      try {
+        const res = await fetch('/clear', { method: 'POST' });
+        const json = await res.json();
+        setStatus(json.ok ? '\u2713 ' + json.message : '\u2717 ' + (json.error || 'Clear failed'),
+                  json.ok ? 'ok' : 'err');
+      } catch (err) {
+        setStatus('\u2717 Network error: ' + err, 'err');
+      }
+    });
+  </script>
+</body>
+</html>
