@@ -97,11 +97,19 @@ humidity` sensors, plus any `weather.*` entity, up to 8 cards. If no
 weather entity is present it is skipped. `.env` is gitignored, so the
 token never gets committed.
 
+> The dashboard auto-refreshes every 20 minutes once configured. You can
+> still press the buttons for an immediate refresh, and a motion webhook
+> will refresh sooner.
+
 ### Dashboard (chart + camera snapshot)
 
 The **Dashboard** button renders a combined screen: a 12-hour dual-axis
 line chart of basement + Bt-prox temperature/humidity on the left, and
 the latest frontlawn camera detection snapshot + timestamp on the right.
+
+Once `HA_URL` and `HA_TOKEN` are set, the dashboard **auto-refreshes every
+20 minutes** while the app is running. A motion detection can also trigger
+an earlier refresh.
 
 To **auto-refresh on motion**, add an automation in Home Assistant that
 fires this app's webhook when the frontlawn camera detects motion. In
@@ -123,10 +131,10 @@ action:
 (Optionally set `HA_WEBHOOK_SECRET` in `.env` and pass it as `?secret=`
 or a JSON `secret` field to authenticate the webhook.)
 
-The motion-triggered refresh runs in a background thread so HA gets an
-immediate `200`. If a refresh is already in progress the webhook returns
-`409` and the request is dropped (the e-Paper can't refresh twice at
-once).
+The motion-triggered refresh is handled by the dashboard scheduler so HA
+gets an immediate `200`. If a refresh is already in progress the trigger
+is queued and will run as soon as the display is free. After any refresh
+(manual, timer, or webhook), the 20-minute timer resets.
 
 ## Mock mode
 
