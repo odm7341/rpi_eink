@@ -111,7 +111,7 @@ HA, create a new automation in YAML mode:
 alias: eink frontlawn refresh
 trigger:
   - platform: state
-    entity_id: binary_sensor.frontlawn_motion
+    entity_id: binary_sensor.frontlawn_person_occupancy
     to: "on"
 action:
   - service: webhook.trigger
