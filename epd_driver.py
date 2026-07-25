@@ -20,6 +20,7 @@ EPD_WIDTH = 800
 EPD_HEIGHT = 480
 
 # 7-color palette used by the panel (BGR byte order in the driver).
+# Indexes 0-6 are the usable colors; index 4 is an unused duplicate black.
 PALETTE = (
     0, 0, 0,       # 0 black
     255, 255, 255, # 1 white
@@ -30,13 +31,54 @@ PALETTE = (
     0, 255, 0,     # 6 green
 ) + (0, 0, 0) * 249
 
+# Driver's packed nibble mapping: palette index -> 4-bit color value
+# sent to the display. 0/4 both map to black; 1=white, 2=yellow, 3=red,
+# 5=blue, 6=green.
+PALETTE_TO_NIBBLE = {0: 0, 1: 2, 2: 4, 3: 6, 4: 1, 5: 3, 6: 5}
+
+
+def pack_buffer(image, width=EPD_WIDTH, height=EPD_HEIGHT):
+    """Convert an RGB image into the panel's 4-bit packed buffer.
+
+    This is the same packing performed by the Waveshare driver, but it
+    quantizes to the 7-color palette **without dithering** so images that use
+    only the palette colors stay crisp and free of dithering artifacts.
+    """
+    from PIL import Image
+
+    pal_image = Image.new("P", (1, 1))
+    pal_image.putpalette(PALETTE)
+
+    imwidth, imheight = image.size
+    if imwidth == width and imheight == height:
+        image_temp = image
+    elif imwidth == height and imheight == width:
+        image_temp = image.rotate(90, expand=True)
+    else:
+        log.warning("Invalid image dimensions: %dx%d, expected %dx%d",
+                    imwidth, imheight, width, height)
+        image_temp = image
+
+    image_7color = image_temp.convert("RGB").quantize(
+        palette=pal_image, dither=Image.Dither.NONE
+    )
+    pixels = image_7color.load()
+    buf = [0x00] * (width * height // 2)
+    for y in range(height):
+        for x in range(width):
+            val = PALETTE_TO_NIBBLE.get(pixels[x, y], 0)
+            if (x % 2) == 0:
+                buf[x // 2 + y * width // 2] = val << 4
+            else:
+                buf[x // 2 + y * width // 2] |= val
+    return buf
+
 
 class MockEPD:
     """Software stand-in for the hardware driver.
 
-    Mirrors the API of ``waveshare_epd.epd7in3e.EPD`` and even reproduces the
-    4-bit color packing performed by the real driver, so processed images look
-    identical to what the panel would receive.
+    Mirrors the API of ``waveshare_epd.epd7in3e.EPD`` and uses the same
+    non-dithering buffer packing so off-device previews match the panel.
     """
 
     def __init__(self):
@@ -55,29 +97,7 @@ class MockEPD:
         return 0
 
     def getbuffer(self, image):
-        from PIL import Image
-
-        pal_image = Image.new("P", (1, 1))
-        pal_image.putpalette(PALETTE)
-
-        imwidth, imheight = image.size
-        if imwidth == self.width and imheight == self.height:
-            image_temp = image
-        elif imwidth == self.height and imheight == self.width:
-            image_temp = image.rotate(90, expand=True)
-        else:
-            log.warning("Invalid image dimensions: %dx%d, expected %dx%d",
-                        imwidth, imheight, self.width, self.height)
-            image_temp = image
-
-        image_7color = image_temp.convert("RGB").quantize(palette=pal_image)
-        buf_7color = bytearray(image_7color.tobytes("raw"))
-        buf = [0x00] * (self.width * self.height // 2)
-        idx = 0
-        for i in range(0, len(buf_7color), 2):
-            buf[idx] = (buf_7color[i] << 4) + buf_7color[i + 1]
-            idx += 1
-        return buf
+        return pack_buffer(image, self.width, self.height)
 
     def display(self, image):
         log.info("[mock] display() called (%d bytes)", len(image))

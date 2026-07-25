@@ -1,13 +1,9 @@
-"""Home Assistant integration: fetch sensor states via the REST API and
-render an e-ink friendly layout (800x480) with Pillow.
+"""Home Assistant integration: fetch sensor states and render an e-ink
+friendly dashboard (800x480) using only the panel's 7-color palette.
 
 Configuration via environment variables:
     HA_URL=http://192.168.0.172:8123
     HA_TOKEN=<long-lived access token>
-
-The REST API endpoint used is ``/api/states`` which returns the state of
-every entity. We then auto-discover temperature/humidity sensors and any
-weather entity and lay them out in a simple grid.
 """
 import io
 import json
@@ -56,10 +52,7 @@ def configured():
 
 
 def get_states():
-    """Return the full ``/api/states`` payload from Home Assistant.
-
-    Raises RuntimeError if HA is not configured, or urllib errors on failure.
-    """
+    """Return the full ``/api/states`` payload from Home Assistant."""
     if not configured():
         raise RuntimeError("HA_URL and HA_TOKEN env vars must be set")
     req = urllib.request.Request(
@@ -127,48 +120,41 @@ def _weather_label(condition):
     return (condition or "—").upper()
 
 
-# E-ink palette-friendly colors (RGB)
-WHITE = (255, 255, 255)
+# --- Strict 7-color palette (matches the panel exactly) -------------------
+# All drawing uses these colors so the panel renders solid, un-dithered
+# pixels.  The palette indices are BGR-encoded in the Waveshare driver.
 BLACK = (0, 0, 0)
-BLUE = (0, 0, 255)
-RED = (255, 0, 0)
+WHITE = (255, 255, 255)
 YELLOW = (255, 255, 0)
+RED = (255, 0, 0)
+BLUE = (0, 0, 255)
 GREEN = (0, 255, 0)
 
-# Modern dashboard theme (preview-friendly; e-Paper will quantize)
-THEME = {
-    "bg": (245, 245, 245),
-    "card": (255, 255, 255),
-    "text": (30, 33, 41),
-    "muted": (100, 104, 112),
-    "header_bg": (30, 58, 138),
-    "header_text": (255, 255, 255),
-    "border": (200, 204, 211),
-    "grid": (225, 228, 232),
-    "caption_bg": (30, 58, 138),
-    "caption_text": (255, 255, 255),
-}
-
-# Brighter, more pleasing data colors (still quantize to EPD palette)
-RED_T = (220, 38, 38)
-YELLOW_T = (234, 179, 8)
-BLUE_T = (37, 99, 235)
-GREEN_T = (34, 197, 94)
+# --- Entity colors for the dashboard charts -------------------------------
+CHART_ENTITIES = [
+    ("sensor.basement_indoor_temperature", "Bsmt", YELLOW),
+    ("sensor.spare_temp", "Bt-px", RED),
+    ("sensor.basement_humidity", "Bsmt", BLUE),
+    ("sensor.spare_humidity", "Bt-px", GREEN),
+]
+CHART_HOURS = int(os.environ.get("HA_CHART_HOURS", "12"))
+SNAPSHOT_ENTITY = os.environ.get("HA_SNAPSHOT_ENTITY", "image.frontlawn_person")
+MOTION_ENTITY = os.environ.get("HA_MOTION_ENTITY", "binary_sensor.frontlawn_person_occupancy")
 
 
 def render(states, width=800, height=480):
     """Render an 800x480 RGB image summarizing Home Assistant sensor state."""
-    img = Image.new("RGB", (width, height), WHITE)
+    img = Image.new("RGB", (width, height), BLACK)
     d = ImageDraw.Draw(img)
 
     temps, humids, weathers = pick_entities(states)
 
     # Header band
-    d.rectangle([0, 0, width, 70], fill=BLACK)
-    d.text((24, 16), "HOME ASSISTANT", fill=WHITE, font=_font(34))
+    d.rectangle([0, 0, width, 70], fill=YELLOW)
+    d.text((24, 18), "HOME ASSISTANT", fill=BLACK, font=_font(36))
     now = datetime.now().strftime("%a %b %d  %H:%M")
-    tw = d.textlength(now, font=_font(28))
-    d.text((width - tw - 24, 20), now, fill=WHITE, font=_font(28))
+    tw = d.textlength(now, font=_font(26))
+    d.text((width - tw - 24, 22), now, fill=BLACK, font=_font(26))
 
     y = 90
 
@@ -181,9 +167,8 @@ def render(states, width=800, height=480):
         hum = attrs.get("humidity", "")
         label = _weather_label(cond)
 
-        d.rounded_rectangle([20, y, width - 20, y + 110], radius=14,
-                            outline=BLACK, width=3, fill=WHITE)
-        d.text((40, y + 12), label, fill=YELLOW, font=_font(46))
+        d.rectangle([20, y, width - 20, y + 110], outline=WHITE, width=3)
+        d.text((40, y + 14), label, fill=YELLOW, font=_font(48))
         parts = []
         if temp != "":
             parts.append(f"{temp}°C")
@@ -191,7 +176,7 @@ def render(states, width=800, height=480):
             parts.append(f"{hum}% RH")
         if parts:
             tw = d.textlength("  ".join(parts), font=_font(32))
-            d.text((width - tw - 40, y + 24), "  ".join(parts),
+            d.text((width - tw - 40, y + 28), "  ".join(parts),
                    fill=BLUE, font=_font(32))
         y += 130
 
@@ -213,23 +198,22 @@ def render(states, width=800, height=480):
         cy = y + row * (card_h + 15)
         if cy + card_h > height - 40:
             break
-        d.rounded_rectangle([x, cy, x + col_w, cy + card_h], radius=12,
-                            outline=BLACK, width=2, fill=WHITE)
+        d.rectangle([x, cy, x + col_w, cy + card_h], outline=WHITE, width=2)
         attrs = s.get("attributes", {}) or {}
         fname = attrs.get("friendly_name", s.get("entity_id", ""))
         if "." in fname:
             fname = fname.split(".")[-1]
-        d.text((x + 16, cy + 10), fname[:26].title(), fill=BLACK, font=_font(22))
+        d.text((x + 16, cy + 10), fname[:26].title(), fill=WHITE, font=_font(22))
         unit = attrs.get("unit_of_measurement", "")
         val = s.get("state", "")
         val_text = f"{val}"
         if unit:
             val_text += f" {unit}"
         color = RED if kind == "T" else BLUE
-        d.text((x + 16, cy + 40), val_text, fill=color, font=_font(42))
+        d.text((x + 16, cy + 40), val_text, fill=color, font=_font(44))
 
     # Footer
-    d.text((24, height - 28), "via Home Assistant REST API", fill=BLACK, font=_font(16))
+    d.text((24, height - 28), "via Home Assistant REST API", fill=WHITE, font=_font(16))
     return img
 
 
@@ -239,18 +223,7 @@ def fetch_and_render(width=800, height=480):
     return render(states, width=width, height=height)
 
 
-# --- Dashboard: chart + camera snapshot -------------------------------------
-
-# Chart entities. Override via env if needed.
-CHART_ENTITIES = [
-    ("sensor.basement_indoor_temperature", "Bsmt", RED_T),
-    ("sensor.spare_temp", "Bt-px", YELLOW_T),
-    ("sensor.basement_humidity", "Bsmt", BLUE_T),
-    ("sensor.spare_humidity", "Bt-px", GREEN_T),
-]
-CHART_HOURS = int(os.environ.get("HA_CHART_HOURS", "12"))
-SNAPSHOT_ENTITY = os.environ.get("HA_SNAPSHOT_ENTITY", "image.frontlawn_person")
-MOTION_ENTITY = os.environ.get("HA_MOTION_ENTITY", "binary_sensor.frontlawn_person_occupancy")
+# --- Dashboard: chart + camera snapshot -----------------------------------
 
 
 def _ha_get(path, binary=False, timeout=20):
@@ -368,47 +341,43 @@ def _round_range(vmin, vmax):
 
 
 def _draw_grid(d, plot_x0, plot_y0, plot_w, plot_h, vmin, vmax, unit="", steps=3):
-    """Draw horizontal grid lines and y-axis labels."""
-    t = THEME
+    """Draw horizontal grid lines and y-axis labels in white."""
     for i in range(steps + 1):
         frac = i / steps
         y = plot_y0 + plot_h * (1 - frac)
         v = vmin + (vmax - vmin) * frac
         # dotted grid line
         for x in range(plot_x0, plot_x0 + plot_w, 12):
-            d.line([x, y, x + 3, y], fill=t["grid"], width=1)
+            d.line([x, y, x + 3, y], fill=WHITE, width=1)
         label = f"{v:.1f}" if unit in ("", "°F") else f"{v:.0f}"
-        tw = d.textlength(label, font=_font(12))
-        d.text((plot_x0 - tw - 6, y - 6), label, fill=t["muted"], font=_font(12))
+        tw = d.textlength(label, font=_font(16))
+        d.text((plot_x0 - tw - 8, y - 8), label, fill=WHITE, font=_font(16))
 
 
 def _draw_subchart(d, x, y, w, h, title, unit, series, max_points=12):
-    """Draw a single clean line chart on the existing canvas.
+    """Draw a single clean dark-mode line chart on the existing canvas.
 
     ``series`` is ``[(label, color, [(x_idx, value), ...]), ...]``.
     """
-    t = THEME
-    pad = 4
-    # card background
-    d.rounded_rectangle([x + pad, y + pad, x + w - pad, y + h - pad],
-                        radius=12, outline=t["border"], width=1, fill=t["card"])
+    # card border
+    d.rectangle([x, y, x + w, y + h], outline=WHITE, width=2)
 
     # layout
-    margin_left = 50
-    margin_right = 14
-    margin_top = 34
-    margin_bottom = 34
+    margin_left = 58
+    margin_right = 16
+    margin_top = 44
+    margin_bottom = 54
     plot_x0 = x + margin_left
     plot_y0 = y + margin_top
     plot_w = w - margin_left - margin_right
     plot_h = h - margin_top - margin_bottom
 
-    # title
-    d.text((x + 16, y + 10), title, fill=t["text"], font=_font(18))
+    # title in yellow
+    d.text((x + 14, y + 10), title, fill=YELLOW, font=_font(24))
 
     all_vals = [v for _, _, pts in series for _, v in pts if v is not None]
     if not all_vals:
-        d.text((x + 20, y + 60), "No data", fill=t["muted"], font=_font(16))
+        d.text((x + 20, y + 70), "No data", fill=WHITE, font=_font(22))
         return
 
     vmin, vmax = _round_range(min(all_vals), max(all_vals))
@@ -416,16 +385,16 @@ def _draw_subchart(d, x, y, w, h, title, unit, series, max_points=12):
         vmax = vmin + 1
 
     # axes
-    d.line([plot_x0, plot_y0, plot_x0, plot_y0 + plot_h], fill=t["border"], width=1)
+    d.line([plot_x0, plot_y0, plot_x0, plot_y0 + plot_h], fill=WHITE, width=2)
     d.line([plot_x0, plot_y0 + plot_h, plot_x0 + plot_w, plot_y0 + plot_h],
-           fill=t["border"], width=1)
+           fill=WHITE, width=2)
 
     _draw_grid(d, plot_x0, plot_y0, plot_w, plot_h, vmin, vmax, unit)
 
     # x-axis labels
-    d.text((plot_x0, plot_y0 + plot_h + 6), "-12h", fill=t["muted"], font=_font(12))
-    d.text((plot_x0 + plot_w - 22, plot_y0 + plot_h + 6), "now",
-           fill=t["muted"], font=_font(12))
+    d.text((plot_x0, plot_y0 + plot_h + 8), "-12h", fill=WHITE, font=_font(16))
+    d.text((plot_x0 + plot_w - 34, plot_y0 + plot_h + 8), "now",
+           fill=WHITE, font=_font(16))
 
     # plot lines
     for label, color, pts in series:
@@ -437,21 +406,13 @@ def _draw_subchart(d, x, y, w, h, title, unit, series, max_points=12):
             py = plot_y0 + plot_h * (1 - (v - vmin) / (vmax - vmin))
             xy.append((px, py))
         if len(xy) >= 2:
-            d.line(xy, fill=color, width=3)
+            d.line(xy, fill=color, width=4)
             # latest dot
-            d.ellipse([xy[-1][0] - 4, xy[-1][1] - 4,
-                       xy[-1][0] + 4, xy[-1][1] + 4], fill=color)
+            d.ellipse([xy[-1][0] - 5, xy[-1][1] - 5,
+                       xy[-1][0] + 5, xy[-1][1] + 5], fill=color)
 
-    # legend (top right)
-    leg_x = x + w - 80
-    leg_y = y + 10
-    for i, (label, color, pts) in enumerate(series):
-        ly = leg_y + i * 16
-        d.line([leg_x, ly + 5, leg_x + 16, ly + 5], fill=color, width=3)
-        d.text((leg_x + 22, ly), label, fill=t["text"], font=_font(12))
-
-    # current values strip below the x-axis (no overlap with chart)
-    cv_y = plot_y0 + plot_h + 22
+    # current values strip below the x-axis (bolder, white text)
+    cv_y = plot_y0 + plot_h + 28
     x_off = plot_x0
     for label, color, pts in series:
         latest = pts[-1][1] if pts else None
@@ -459,29 +420,28 @@ def _draw_subchart(d, x, y, w, h, title, unit, series, max_points=12):
             continue
         val_text = f"{latest:.1f}{unit}"
         text = f"{label}: {val_text}"
-        font = _font(12)
+        font = _font(18)
         tw = d.textlength(text, font=font)
-        d.line([x_off, cv_y + 5, x_off + 12, cv_y + 5], fill=color, width=3)
-        d.text((x_off + 16, cv_y), text, fill=t["text"], font=font)
-        x_off += int(tw) + 28
+        d.line([x_off, cv_y + 7, x_off + 16, cv_y + 7], fill=color, width=4)
+        d.text((x_off + 22, cv_y), text, fill=WHITE, font=font)
+        x_off += int(tw) + 34
 
 
 def render_combined(width=800, height=480):
-    """Render the full dashboard: stacked charts on the left, latest camera
-    detection snapshot on the right."""
-    t = THEME
-    img = Image.new("RGB", (width, height), t["bg"])
+    """Render the full dark dashboard: stacked charts on the left, latest
+    camera detection snapshot on the right."""
+    img = Image.new("RGB", (width, height), BLACK)
     d = ImageDraw.Draw(img)
 
-    header_h = 36
-    gap = 6
+    header_h = 46
+    gap = 8
 
-    # Sleek header
-    d.rectangle([0, 0, width, header_h], fill=t["header_bg"])
-    d.text((14, 8), "Front Lawn E-Ink", fill=t["header_text"], font=_font(20))
+    # Bold yellow header, black text
+    d.rectangle([0, 0, width, header_h], fill=YELLOW)
+    d.text((14, 10), "Front Lawn E-Ink", fill=BLACK, font=_font(30))
     ts_now = datetime.now().strftime("%a %d %H:%M").replace(" 0", " ")
-    tw = d.textlength(ts_now, font=_font(16))
-    d.text((width - tw - 14, 10), ts_now, fill=t["header_text"], font=_font(16))
+    tw = d.textlength(ts_now, font=_font(22))
+    d.text((width - tw - 14, 12), ts_now, fill=BLACK, font=_font(22))
 
     # Left panel: two charts
     left_x = 0
@@ -517,38 +477,38 @@ def render_combined(width=800, height=480):
     snap_img, ts = get_detection_snapshot()
     if snap_img is not None:
         # Fit snapshot, leaving room for caption bar
-        cap_h = 26
+        cap_h = 34
         avail_h = right_h - cap_h
         sw, sh = snap_img.size
         scale = min(right_w / sw, avail_h / sh)
         nw = max(1, int(sw * scale))
         nh = max(1, int(sh * scale))
-        snap_img = snap_img.resize((nw, nh), Image.LANCZOS)
+        snap_img = snap_img.resize((nw, nh), Image.NEAREST)
         px = right_x + (right_w - nw) // 2
         py = right_y + (avail_h - nh) // 2
 
         # snapshot border
-        d.rounded_rectangle([px - 2, py - 2, px + nw + 2, py + nh + 2],
-                            radius=10, outline=t["border"], width=2)
+        d.rectangle([px - 2, py - 2, px + nw + 2, py + nh + 2],
+                    outline=WHITE, width=2)
         img.paste(snap_img, (px, py))
 
-        # caption bar
+        # yellow caption bar with black text
         bar_y = right_y + right_h - cap_h
-        d.rounded_rectangle([right_x, bar_y, right_x + right_w, right_y + right_h],
-                            radius=8, fill=t["caption_bg"])
+        d.rectangle([right_x, bar_y, right_x + right_w, right_y + right_h],
+                    fill=YELLOW)
         txt = "Detected " + _fmt_ts(ts)
-        font = _font(14)
+        font = _font(18)
         tw = d.textlength(txt, font=font)
         if tw > right_w - 8:
             txt = _fmt_ts(ts)
             tw = d.textlength(txt, font=font)
-        d.text((right_x + (right_w - tw) // 2, bar_y + 4),
-               txt, fill=t["caption_text"], font=font)
+        d.text((right_x + (right_w - tw) // 2, bar_y + 6),
+               txt, fill=BLACK, font=font)
     else:
-        d.rounded_rectangle([right_x, right_y, right_x + right_w, right_y + right_h],
-                            radius=10, outline=t["border"], width=2)
-        d.text((right_x + 20, right_y + 40), "No snapshot", fill=t["muted"],
-               font=_font(18))
+        d.rectangle([right_x, right_y, right_x + right_w, right_y + right_h],
+                    outline=WHITE, width=2)
+        d.text((right_x + 20, right_y + 40), "No snapshot", fill=WHITE,
+               font=_font(22))
 
     return img
 

@@ -42,9 +42,9 @@ def _load_env_file(path=".env"):
 _load_env_file()
 
 try:
-    from epd_driver import EPD_HEIGHT, EPD_WIDTH, get_epd, PALETTE
+    from epd_driver import EPD_HEIGHT, EPD_WIDTH, get_epd, pack_buffer, PALETTE
 except ImportError:  # allow running as a bare module import for tests
-    from epd_driver import EPD_HEIGHT, EPD_WIDTH, get_epd, PALETTE  # noqa: F401
+    from epd_driver import EPD_HEIGHT, EPD_WIDTH, get_epd, pack_buffer, PALETTE  # noqa: F401
 
 try:
     import ha_display
@@ -88,11 +88,13 @@ def prepare_image(file_bytes):
 
 
 def quantize_preview(image):
-    """Produce a small preview PNG dithered to the panel's 7 colors so the
+    """Produce a small preview PNG quantized to the panel's 7 colors so the
     web page shows what will actually appear on the screen."""
     pal_image = Image.new("P", (1, 1))
     pal_image.putpalette(PALETTE)
-    dithered = image.convert("RGB").quantize(palette=pal_image).convert("RGB")
+    dithered = image.convert("RGB").quantize(
+        palette=pal_image, dither=Image.Dither.NONE
+    ).convert("RGB")
     preview = dithered.copy()
     preview.thumbnail((480, 288))
     return preview
@@ -105,7 +107,8 @@ def render_to_epd(canvas):
     with _epd_lock:
         epd.init()
         try:
-            buf = epd.getbuffer(canvas)
+            # Use our own packing so we can quantize without dithering.
+            buf = pack_buffer(canvas)
             epd.display(buf)
         finally:
             try:
