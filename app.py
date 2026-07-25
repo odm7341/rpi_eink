@@ -194,6 +194,78 @@ def _render_dashboard():
     return canvas
 
 
+# Dashboard auto-refresh state: every 20 minutes, or sooner on webhook.
+_dashboard_scheduler = {
+    "interval": 20 * 60,
+    "event": threading.Event(),
+    "last_refresh": None,
+    "thread": None,
+    "pending": False,
+}
+
+
+def _mark_dashboard_refresh():
+    """Record the current time so the periodic timer starts from now."""
+    _dashboard_scheduler["last_refresh"] = time.time()
+
+
+def _dashboard_refresh_worker():
+    """Background loop that refreshes the dashboard every interval, or
+    immediately when a webhook/event request sets the event."""
+    while True:
+        last = _dashboard_scheduler["last_refresh"]
+        if last is None:
+            # Start the very first refresh after a short delay so the app can boot.
+            _dashboard_scheduler["event"].wait(10)
+            _dashboard_scheduler["event"].clear()
+        else:
+            remaining = max(1, _dashboard_scheduler["interval"] - (time.time() - last))
+            _dashboard_scheduler["event"].wait(timeout=remaining)
+            _dashboard_scheduler["event"].clear()
+
+        if not ha_display or not ha_display.configured():
+            continue
+
+        if _epd_lock.locked():
+            # Another refresh is running; come back soon and retry.
+            _dashboard_scheduler["pending"] = True
+            _dashboard_scheduler["event"].wait(10)
+            _dashboard_scheduler["event"].set()
+            continue
+
+        _dashboard_scheduler["pending"] = False
+        with _epd_lock:
+            try:
+                _render_dashboard()
+                _mark_dashboard_refresh()
+                log.info("Dashboard auto-refresh completed")
+            except Exception:  # noqa: BLE001
+                log.exception("Dashboard auto-refresh failed")
+
+
+def _trigger_dashboard_refresh(reason="webhook"):
+    """Signal the scheduler to refresh as soon as possible."""
+    _dashboard_scheduler["pending"] = True
+    _dashboard_scheduler["event"].set()
+    log.info("Dashboard refresh triggered by %s", reason)
+
+
+def start_dashboard_scheduler():
+    """Start the periodic dashboard refresh thread if it isn't already running.
+    Only starts if HA dashboard integration is configured."""
+    if not ha_display or not ha_display.configured():
+        return False
+    if _dashboard_scheduler["thread"] is not None and _dashboard_scheduler["thread"].is_alive():
+        return True
+    _dashboard_scheduler["last_refresh"] = time.time()
+    _dashboard_scheduler["event"].clear()
+    t = threading.Thread(target=_dashboard_refresh_worker, daemon=True, name="dashboard-scheduler")
+    t.start()
+    _dashboard_scheduler["thread"] = t
+    log.info("Dashboard scheduler started: interval=%ds", _dashboard_scheduler["interval"])
+    return True
+
+
 @app.route("/ha_dashboard", methods=["POST"])
 def ha_dashboard():
     if ha_display is None:
@@ -201,10 +273,11 @@ def ha_dashboard():
     if not ha_display.configured():
         return jsonify(ok=False,
                        error="Set HA_URL and HA_TOKEN in .env to use the dashboard."), 400
-    if _dash_in_progress.is_set():
-        return jsonify(ok=False, error="A dashboard refresh is already in progress."), 409
+    if _epd_lock.locked():
+        return jsonify(ok=False, error="A refresh is already in progress."), 409
     try:
         _render_dashboard()
+        _mark_dashboard_refresh()
     except Exception as exc:  # noqa: BLE001
         log.exception("Dashboard fetch/render failed")
         return jsonify(ok=False, error=f"HA request failed: {exc}"), 502
@@ -216,7 +289,6 @@ def ha_dashboard():
 
 # Webhook secret (optional): set HA_WEBHOOK_SECRET in .env to require it.
 WEBHOOK_SECRET = os.environ.get("HA_WEBHOOK_SECRET", "")
-_dash_in_progress = threading.Event()
 
 
 @app.route("/ha_webhook", methods=["POST"])
@@ -224,8 +296,8 @@ def ha_webhook():
     """Triggered by a Home Assistant automation on frontlawn motion.
 
     Accepts an optional ``secret`` JSON field or ``?secret=`` query param
-    that must match HA_WEBHOOK_SECRET if that var is set. The refresh runs
-    in a background thread so HA gets an immediate 200 response.
+    that must match HA_WEBHOOK_SECRET if that var is set. The scheduler will
+    refresh the dashboard as soon as the display is free.
     """
     if ha_display is None or not ha_display.configured():
         return jsonify(ok=False, error="Dashboard not configured."), 400
@@ -233,21 +305,8 @@ def ha_webhook():
         provided = request.args.get("secret") or (request.get_json(silent=True) or {}).get("secret", "")
         if provided != WEBHOOK_SECRET:
             return jsonify(ok=False, error="Bad webhook secret."), 403
-    if _dash_in_progress.is_set():
-        return jsonify(ok=False, error="A refresh is already in progress."), 409
-
-    def _bg():
-        _dash_in_progress.set()
-        try:
-            _render_dashboard()
-            log.info("webhook: dashboard refreshed")
-        except Exception as exc:  # noqa: BLE001
-            log.exception("webhook dashboard refresh failed")
-        finally:
-            _dash_in_progress.clear()
-
-    threading.Thread(target=_bg, daemon=True).start()
-    return jsonify(ok=True, message="Dashboard refresh started.")
+    _trigger_dashboard_refresh("webhook")
+    return jsonify(ok=True, message="Dashboard refresh triggered.")
 
 
 @app.route("/clear", methods=["POST"])
@@ -281,6 +340,9 @@ def _mock_flag():
 
 if __name__ == "__main__":
     os.makedirs(UPLOAD_DIR, exist_ok=True)
+    started = start_dashboard_scheduler()
+    if started:
+        log.info("Dashboard auto-refresh enabled: every %ds", _dashboard_scheduler["interval"])
     host = os.environ.get("HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", "8000"))
     log.info("Serving on http://%s:%d (mock=%s)", host, port, _mock_flag())
