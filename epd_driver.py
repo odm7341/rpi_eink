@@ -31,19 +31,14 @@ PALETTE = (
     0, 255, 0,     # 6 green
 ) + (0, 0, 0) * 249
 
-# Driver's packed nibble mapping: palette index -> 4-bit color value
-# sent to the display. 0/4 both map to black; 1=white, 2=yellow, 3=red,
-# 5=blue, 6=green.
-PALETTE_TO_NIBBLE = {0: 0, 1: 2, 2: 4, 3: 6, 4: 1, 5: 3, 6: 5}
-
-
 def pack_buffer(image, width=EPD_WIDTH, height=EPD_HEIGHT, dither=None):
     """Convert an RGB image into the panel's 4-bit packed buffer.
 
-    This is the same packing performed by the Waveshare driver, but with
-    an optional dither setting. By default it matches the driver (Floyd-
-    Steinberg dithering) so uploaded photos look smooth. Pass
-    ``dither=Image.Dither.NONE`` for solid, non-dithered dashboard colors.
+    Mirrors the Waveshare driver's packing: the quantized palette index is
+    used directly as the 4-bit nibble (no remapping).  Pass
+    ``dither=Image.Dither.NONE`` for solid dashboard colors; pass
+    ``Image.Dither.FLOYDSTEINBERG`` (the upload path) for real dithering so
+    photos don't posterize.
     """
     from PIL import Image
 
@@ -64,15 +59,12 @@ def pack_buffer(image, width=EPD_WIDTH, height=EPD_HEIGHT, dither=None):
     if dither is not None:
         kwargs["dither"] = dither
     image_7color = image_temp.convert("RGB").quantize(**kwargs)
-    pixels = image_7color.load()
+    buf_7color = bytearray(image_7color.tobytes("raw"))
     buf = [0x00] * (width * height // 2)
-    for y in range(height):
-        for x in range(width):
-            val = PALETTE_TO_NIBBLE.get(pixels[x, y], 0)
-            if (x % 2) == 0:
-                buf[x // 2 + y * width // 2] = val << 4
-            else:
-                buf[x // 2 + y * width // 2] |= val
+    idx = 0
+    for i in range(0, len(buf_7color), 2):
+        buf[idx] = (buf_7color[i] << 4) + buf_7color[i + 1]
+        idx += 1
     return buf
 
 
