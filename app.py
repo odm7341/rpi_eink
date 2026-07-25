@@ -17,6 +17,30 @@ import time
 from flask import Flask, jsonify, render_template, request, url_for
 from PIL import Image
 
+
+def _load_env_file(path=".env"):
+    """Minimal .env loader: KEY=VALUE lines, optional surrounding quotes,
+    ignores blanks and # comments. Only sets vars not already in os.environ
+    so real env vars always win."""
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), path)
+    if not os.path.exists(p):
+        return
+    with open(p, "r", encoding="utf-8") as f:
+        for raw in f:
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            k = k.strip()
+            v = v.strip()
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+                v = v[1:-1]
+            if k and k not in os.environ:
+                os.environ[k] = v
+
+
+_load_env_file()
+
 try:
     from epd_driver import EPD_HEIGHT, EPD_WIDTH, get_epd, PALETTE
 except ImportError:  # allow running as a bare module import for tests

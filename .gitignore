@@ -17,3 +17,7 @@ static/uploads/
 
 # Logs
 *.log
+
+# Secrets / local config
+.env
+.env.local

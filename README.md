@@ -73,20 +73,29 @@ for the Pi Zero (no headless browser needed).
 To set it up:
 
 1. In HA: Profile → **Long-Lived Access Tokens** → Create Token → name it `eink`.
-2. Copy the token, then run the app with:
+2. Copy the token into `.env` (copy `.env.example` to `.env`):
 
    ```bash
-   HA_URL=http://192.168.0.172:8123 \
-   HA_TOKEN=eyJhbGciOi... \
+   cp .env.example .env
+   # edit .env and set HA_URL and HA_TOKEN
+   ```
+
+3. Just run:
+
+   ```bash
    python3 app.py
    ```
 
-3. Open the web page and press **Home Assistant**.
+   The app reads `.env` automatically on startup. Real env vars still win,
+   so you can override on the command line if needed (e.g.
+   `EPD_MOCK=1 python3 app.py`).
+
+4. Open the web page and press **Home Assistant**.
 
 The layout auto-discovers `device_class: temperature` and `device_class:
 humidity` sensors, plus any `weather.*` entity, up to 8 cards. If no
-weather entity is present it is skipped. The token is read from an
-environment variable only — nothing is committed to the repo.
+weather entity is present it is skipped. `.env` is gitignored, so the
+token never gets committed.
 
 ## Mock mode
 
