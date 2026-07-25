@@ -397,7 +397,7 @@ def _draw_subchart(d, x, y, w, h, title, unit, series, max_points=12):
     margin_left = 50
     margin_right = 14
     margin_top = 34
-    margin_bottom = 22
+    margin_bottom = 34
     plot_x0 = x + margin_left
     plot_y0 = y + margin_top
     plot_w = w - margin_left - margin_right
@@ -441,12 +441,6 @@ def _draw_subchart(d, x, y, w, h, title, unit, series, max_points=12):
             # latest dot
             d.ellipse([xy[-1][0] - 4, xy[-1][1] - 4,
                        xy[-1][0] + 4, xy[-1][1] + 4], fill=color)
-            # current value label near the latest dot
-            latest = pts[-1][1]
-            if latest is not None:
-                text = f"{latest:.1f}{unit}"
-                d.text((xy[-1][0] + 8, xy[-1][1] - 8), text,
-                       fill=color, font=_font(12))
 
     # legend (top right)
     leg_x = x + w - 80
@@ -455,6 +449,21 @@ def _draw_subchart(d, x, y, w, h, title, unit, series, max_points=12):
         ly = leg_y + i * 16
         d.line([leg_x, ly + 5, leg_x + 16, ly + 5], fill=color, width=3)
         d.text((leg_x + 22, ly), label, fill=t["text"], font=_font(12))
+
+    # current values strip below the x-axis (no overlap with chart)
+    cv_y = plot_y0 + plot_h + 22
+    x_off = plot_x0
+    for label, color, pts in series:
+        latest = pts[-1][1] if pts else None
+        if latest is None:
+            continue
+        val_text = f"{latest:.1f}{unit}"
+        text = f"{label}: {val_text}"
+        font = _font(12)
+        tw = d.textlength(text, font=font)
+        d.line([x_off, cv_y + 5, x_off + 12, cv_y + 5], fill=color, width=3)
+        d.text((x_off + 16, cv_y), text, fill=t["text"], font=font)
+        x_off += int(tw) + 28
 
 
 def render_combined(width=800, height=480):
