@@ -135,8 +135,10 @@ def index():
     last_url = ""
     if has_last:
         last_url = url_for("static", filename=f"uploads/{LAST_FILE}") + f"?v={int(time.time())}"
+    last_url_base = url_for("static", filename=f"uploads/{LAST_FILE}")
     return render_template("index.html", width=EPD_WIDTH, height=EPD_HEIGHT,
-                           has_last=has_last, last_url=last_url)
+                           has_last=has_last, last_url=last_url,
+                           last_url_base=last_url_base)
 
 
 @app.route("/upload", methods=["POST"])
@@ -272,7 +274,7 @@ def start_dashboard_scheduler():
         return False
     if _dashboard_scheduler["thread"] is not None and _dashboard_scheduler["thread"].is_alive():
         return True
-    _dashboard_scheduler["last_refresh"] = time.time()
+    _dashboard_scheduler["last_refresh"] = None  # first refresh fires shortly after boot
     _dashboard_scheduler["event"].clear()
     t = threading.Thread(target=_dashboard_refresh_worker, daemon=True, name="dashboard-scheduler")
     t.start()
@@ -288,18 +290,9 @@ def ha_dashboard():
     if not ha_display.configured():
         return jsonify(ok=False,
                        error="Set HA_URL and HA_TOKEN in .env to use the dashboard."), 400
-    if _epd_lock.locked():
-        return jsonify(ok=False, error="A refresh is already in progress."), 409
-    try:
-        _render_dashboard()
-        _mark_dashboard_refresh()
-    except Exception as exc:  # noqa: BLE001
-        log.exception("Dashboard fetch/render failed")
-        return jsonify(ok=False, error=f"HA request failed: {exc}"), 502
-    thumb = url_for("static", filename=f"uploads/{THUMB_FILE}") + f"?v={int(time.time())}"
+    _trigger_dashboard_refresh("manual")
     return jsonify(ok=True,
-                   preview=thumb,
-                   message="Dashboard sent to the display (refresh takes ~25s).")
+                   message="Dashboard refresh started (takes ~25s)."), 202
 
 
 # Webhook secret (optional): set HA_WEBHOOK_SECRET in .env to require it.

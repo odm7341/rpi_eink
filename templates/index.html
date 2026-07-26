@@ -138,7 +138,18 @@
 
     haBtn.addEventListener('click', () => postEmpty('/ha', 'Fetching Home Assistant & refreshing (this takes ~25s)\u2026'));
 
-    dashBtn.addEventListener('click', () => postEmpty('/ha_dashboard', 'Fetching dashboard & refreshing (this takes ~25s)\u2026'));
+    function reloadPreview() {
+      if (!lastImg) { location.reload(); return; }
+      const empty = document.querySelector('.preview .empty');
+      if (empty) empty.remove();
+      lastImg.src = '{{ last_url_base }}' + '?v=' + Date.now();
+      lastImg.alt = 'last uploaded image';
+    }
+
+    dashBtn.addEventListener('click', async () => {
+      await postEmpty('/ha_dashboard', 'Dashboard refresh started (takes ~25s)\u2026');
+      setTimeout(reloadPreview, 30000);
+    });
   </script>
 </body>
 </html>
